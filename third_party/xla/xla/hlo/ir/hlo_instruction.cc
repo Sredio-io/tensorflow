@@ -2344,13 +2344,27 @@ void HloInstruction::set_single_sharding(const HloSharding& sharding) {
 
 void HloInstruction::SetupDerivedInstruction(
     HloInstruction* derived_instruction) const {
-  if (sharding_ != nullptr &&
-      ShapeUtil::CompatibleKind(shape_, derived_instruction->shape())) {
+  absl::string_view sharding_attr_name =
+      HloSharding::ShardingFrontendAttrName();
+  std::optional<std::string> sharding_frontend_attr;
+  if (ShapeUtil::CompatibleKind(shape_, derived_instruction->shape())) {
     // Only copy sharding if the tuple tree shape of the two instruction is
     // compatible because copying it between differently shaped instructions
     // can produce invalid shardings.
-    derived_instruction->set_sharding(*sharding_);
-  } else if (!ShapeUtil::CompatibleKind(shape_, derived_instruction->shape())) {
+    if (sharding_ != nullptr) {
+      derived_instruction->set_sharding(*sharding_);
+    }
+    // Use this instruction's sharding frontend attribute if present, otherwise
+    // use that of the derived.
+    if (has_frontend_attributes()) {
+      sharding_frontend_attr = get_frontend_attribute(sharding_attr_name);
+    }
+    if (!sharding_frontend_attr &&
+        derived_instruction->has_frontend_attributes()) {
+      sharding_frontend_attr =
+          derived_instruction->get_frontend_attribute(sharding_attr_name);
+    }
+  } else {
     derived_instruction->clear_sharding();
   }
   derived_instruction->set_metadata(*metadata_);
@@ -2363,6 +2377,15 @@ void HloInstruction::SetupDerivedInstruction(
   } else if (derived_instruction->has_rare()) {
     derived_instruction->mutable_rare()->frontend_attributes.Clear();
     derived_instruction->mutable_rare()->statistics_viz.Clear();
+  }
+  // Preserve sharding frontend attribute (e.g. shardy) if present.
+  if (sharding_frontend_attr) {
+    derived_instruction->set_frontend_attribute(sharding_attr_name,
+                                                *sharding_frontend_attr);
+  } else if (derived_instruction->has_frontend_attributes()) {
+    derived_instruction->mutable_rare()
+        ->frontend_attributes.mutable_map()
+        ->erase(sharding_attr_name);
   }
   // If the derived instruction has the same opcode as current, then the backend
   // config is also applicable (only if derived instruction doesn't have its own
